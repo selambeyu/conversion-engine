@@ -30,6 +30,7 @@ dependencies = [
     "tqdm>=4.66.0",
     "africastalking>=1.2.8",
     "scipy>=1.13.0",
+    "hubspot-api-client>=8.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
