@@ -288,7 +288,12 @@ def classify_segment(crunchbase: dict, layoffs: dict,
 # STEP 5 — Build the full brief
 # ─────────────────────────────────────────────────────────
 
-def build_signal_brief(company_name: str, open_roles: int = 0) -> dict:
+def build_signal_brief(
+    company_name: str,
+    open_roles: int = 0,
+    careers_url: str = "",
+    scrape_jobs: bool = True,
+) -> dict:
     """
     Main function. Call this for every prospect.
     Returns the hiring_signal_brief dict.
@@ -297,6 +302,19 @@ def build_signal_brief(company_name: str, open_roles: int = 0) -> dict:
 
     crunchbase  = lookup_crunchbase(company_name)
     layoffs     = check_layoffs(company_name)
+
+    # Job-post velocity signal via Playwright (public pages only)
+    job_signal: dict = {}
+    if scrape_jobs:
+        try:
+            from enrichment.job_post_scraper import scrape_job_posts
+            job_signal = scrape_job_posts(company_name, careers_url=careers_url)
+            # Use scraped role count to supplement open_roles if caller passed 0
+            if open_roles == 0 and job_signal.get("engineering_roles", 0) > 0:
+                open_roles = job_signal["engineering_roles"]
+        except Exception as e:
+            print(f"  Job scrape skipped: {e}")
+
     ai_maturity = score_ai_maturity(crunchbase, open_roles)
     segment     = classify_segment(crunchbase, layoffs, ai_maturity)
 
@@ -358,6 +376,18 @@ def build_signal_brief(company_name: str, open_roles: int = 0) -> dict:
             "ask rather than assert."
         )
 
+    # Job-post velocity sentence
+    if job_signal:
+        vel = job_signal.get("velocity_signal", "low")
+        tot = job_signal.get("total_listings", 0)
+        ai_r = job_signal.get("ai_ml_roles", 0)
+        src  = job_signal.get("sources_scraped", [])
+        job_conf = job_signal.get("confidence", "low")
+        parts.append(
+            f"Job-post velocity: {vel} ({tot} public listings via {src}, "
+            f"{ai_r} AI/ML roles, confidence={job_conf})."
+        )
+
     summary = " ".join(parts)
 
     brief = {
@@ -375,9 +405,27 @@ def build_signal_brief(company_name: str, open_roles: int = 0) -> dict:
         "all_segment_scores": segment["all_scores"],
         "pitch_angle":        pitch_angle,
         "summary":            summary,
+        # Job-post velocity signal (Playwright public scrape)
+        "hiring_signal_brief": {
+            **job_signal,
+            "confidence": job_signal.get("confidence", "low"),
+            "evidence":   job_signal.get("evidence", "No job scrape data available."),
+        } if job_signal else {
+            "source": "none",
+            "confidence": "low",
+            "evidence": "Job scraping skipped or returned no data.",
+            "total_listings": 0,
+            "engineering_roles": 0,
+            "ai_ml_roles": 0,
+            "velocity_signal": "low",
+        },
     }
 
     print(f"  Segment:     {seg} ({segment['confidence']})")
     print(f"  AI maturity: {ai_maturity['score']}/3 ({ai_maturity['confidence']})")
     print(f"  Pitch:       {pitch_angle}")
+    if job_signal:
+        print(f"  Job signal:  {job_signal.get('total_listings',0)} listings "
+              f"| velocity={job_signal.get('velocity_signal','low')} "
+              f"| confidence={job_signal.get('confidence','low')}")
     return brief

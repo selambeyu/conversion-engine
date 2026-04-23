@@ -46,3 +46,36 @@ def handle_stop_command(phone_number: str) -> bool:
     """Check if message is a STOP command — must always be respected."""
     return True  # Log this number, never contact again
 
+
+# ─── Warm-lead registry ───────────────────────────────────
+# SMS is only for warm leads (prospects who replied to email).
+# Cold outreach is email-only.
+
+_warm_leads: dict = {}   # identifier (phone or email) → {"email": ..., "phone": ...}
+
+
+def mark_warm_lead(identifier: str, email: str = "", phone: str = ""):
+    """
+    Register a phone number or email as a warm lead (prospect who replied to email).
+    Optionally cross-link email ↔ phone so the SMS webhook can find the HubSpot contact.
+    SMS outbound must ONLY be sent to identifiers registered here.
+    """
+    key = identifier.strip().lower()
+    _warm_leads[key] = {"email": email.strip().lower(), "phone": phone.strip()}
+    # Also index by the other identifier if provided
+    if email and email.strip().lower() != key:
+        _warm_leads[email.strip().lower()] = {"email": email.strip().lower(), "phone": phone.strip()}
+    if phone and phone.strip() != key:
+        _warm_leads[phone.strip()] = {"email": email.strip().lower(), "phone": phone.strip()}
+
+
+def is_warm_lead(identifier: str) -> bool:
+    """Return True if this phone/email is a known warm lead."""
+    return identifier.strip().lower() in _warm_leads
+
+
+def get_warm_lead_email(phone: str) -> str:
+    """Return the email address linked to this phone number, or empty string."""
+    entry = _warm_leads.get(phone.strip(), {})
+    return entry.get("email", "") if isinstance(entry, dict) else ""
+

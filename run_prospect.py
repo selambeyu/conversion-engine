@@ -25,6 +25,7 @@ sys.path.insert(0, ".")
 from enrichment.signal_brief import build_signal_brief, download_data_files
 from agent.email_handler     import run_outreach
 from agent.hubspot_handler   import upsert_contact
+from agent.sms_handler       import send_sms, mark_warm_lead, is_warm_lead
 
 
 def get_booking_link(name: str, email: str) -> str:
@@ -39,6 +40,8 @@ def run_end_to_end(
     prospect_name:  str,
     prospect_email: str,
     open_roles:     int = 0,
+    prospect_phone: str = "",   # E.164, e.g. "+251912345678"; leave blank to skip SMS
+    careers_url:    str = "",
 ) -> dict:
 
     print()
@@ -52,7 +55,7 @@ def run_end_to_end(
 
     # ── 1. Research ───────────────────────────────────────
     print("\n[1/4] Building signal brief...")
-    brief = build_signal_brief(company_name, open_roles=open_roles)
+    brief = build_signal_brief(company_name, open_roles=open_roles, careers_url=careers_url)
 
     # ── 2. HubSpot ────────────────────────────────────────
     print("\n[2/4] Creating HubSpot contact...")
@@ -90,20 +93,44 @@ def run_end_to_end(
         hubspot_contact_id = contact_id,
     )
 
-    # ── 4. Save run record ────────────────────────────────
-    print("\n[4/4] Saving to logs...")
+    # ── 4. SMS follow-up (warm leads only) ───────────────
+    sms_status = "skipped"
+    # Register phone ↔ email cross-link so the inbound webhook can resolve HubSpot ID
+    if prospect_phone:
+        mark_warm_lead(prospect_phone, email=prospect_email, phone=prospect_phone)
+
+    if prospect_phone and is_warm_lead(prospect_phone):
+        print("\n[4/5] Sending SMS follow-up (warm lead)...")
+        booking = get_booking_link(prospect_name, prospect_email)
+        try:
+            send_sms(
+                prospect_phone,
+                f"Hi {prospect_name.split()[0]}, this is Maya from Tenacious. "
+                f"Did you get my email? Happy to chat — book here: {booking}",
+            )
+            sms_status = "sent"
+        except Exception as e:
+            print(f"  SMS failed: {e}")
+            sms_status = f"error: {e}"
+    elif prospect_phone:
+        print(f"\n[4/5] SMS skipped — {prospect_phone} is not yet a warm lead.")
+
+    # ── 5. Save run record ────────────────────────────────
+    print("\n[5/5] Saving to logs...")
     Path("logs").mkdir(exist_ok=True)
     record = {
         "timestamp":      datetime.utcnow().isoformat(),
         "company":        company_name,
         "prospect":       prospect_name,
         "email":          prospect_email,
+        "phone":          prospect_phone,
         "segment":        brief.get("segment"),
         "ai_maturity":    brief.get("ai_maturity_score"),
         "pitch_angle":    brief.get("pitch_angle"),
         "hubspot_id":     contact_id,
         "email_subject":  outreach.get("subject"),
         "email_status":   outreach.get("send_status"),
+        "sms_status":     sms_status,
         "trace_id":       outreach.get("trace_id"),
         "booking_link":   booking,
     }
@@ -118,6 +145,7 @@ def run_end_to_end(
     print(f"  Segment:     {brief.get('segment')}")
     print(f"  AI maturity: {brief.get('ai_maturity_score')}/3")
     print(f"  Email:       {outreach.get('send_status')}")
+    print(f"  SMS:         {sms_status}")
     print(f"  HubSpot ID:  {contact_id}")
     print(f"  Trace ID:    {outreach.get('trace_id')}")
     print(f"  Booking:     {booking}")

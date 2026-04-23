@@ -17,7 +17,7 @@ If any field is missing → points deducted.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from hubspot import HubSpot
 from hubspot.crm.contacts import SimplePublicObjectInput, SimplePublicObjectInputForCreate
@@ -157,6 +157,39 @@ def _find_contact_by_email(email: str):
         return None
     except Exception:
         return None
+
+
+# Public alias so main.py can import it without the underscore
+def find_contact_by_email(email: str):
+    return _find_contact_by_email(email)
+
+
+# ─────────────────────────────────────────────────────────
+# MARK MEETING BOOKED (called by Cal.com webhook)
+# ─────────────────────────────────────────────────────────
+
+def mark_meeting_booked(contact_id: str, booking_url: str = "", booked_at: str = ""):
+    """
+    Update a HubSpot contact when a Cal.com booking is confirmed.
+    Sets: outreach_status=booked, booking_url, enrichment_timestamp.
+    """
+    client = get_client()
+    props = {
+        "outreach_status": "booked",
+        "enrichment_timestamp": booked_at or datetime.now(timezone.utc).isoformat(),
+    }
+    if booking_url:
+        props["booking_url"] = booking_url
+
+    try:
+        client.crm.contacts.basic_api.update(
+            contact_id=contact_id,
+            simple_public_object_input=SimplePublicObjectInput(properties=props),
+        )
+        print(f"  HubSpot: meeting_booked=true for contact {contact_id}")
+    except ApiException as e:
+        print(f"  HubSpot mark_meeting_booked error: {e}")
+        raise
 
 
 # ─────────────────────────────────────────────────────────
