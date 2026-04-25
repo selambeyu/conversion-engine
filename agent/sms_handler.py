@@ -33,6 +33,12 @@ def _normalize_phone(phone_number: str) -> str:
 def send_sms(phone_number: str, message: str) -> dict:
     """Send an SMS to a phone number."""
     try:
+        # Kill switch: route all outbound to staff sink unless PRODUCTION_MODE=true
+        STAFF_SINK_PHONE = os.getenv("STAFF_SINK_PHONE", "+254700000000")
+        if os.getenv("PRODUCTION_MODE", "false").lower() != "true":
+            print(f"  [kill-switch] PRODUCTION_MODE != true — redirecting {phone_number} → {STAFF_SINK_PHONE}")
+            phone_number = STAFF_SINK_PHONE
+
         phone = _normalize_phone(phone_number)
         response = _get_sms().send(message, [phone])
         print(f"SMS sent to {phone_number}: {response}")

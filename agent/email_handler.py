@@ -35,6 +35,73 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL     = os.getenv("FROM_EMAIL", "onboarding@resend.dev")
 DEV_MODEL      = os.getenv("DEV_MODEL", "deepseek/deepseek-chat")
 
+# ─────────────────────────────────────────────────────────
+# MECHANISM: Signal-Confidence-Aware Phrasing
+# ─────────────────────────────────────────────────────────
+# Maps confidence level + signal type to assertion vs hedge vocabulary.
+# This is the Act IV mechanism: agent language automatically adjusts
+# based on per-signal confidence so we never over-claim weak signals.
+
+_CONFIDENCE_THRESHOLDS = {"high": 0.7, "medium": 0.4, "low": 0.0}
+
+# Strong assertion words that must be replaced when confidence is low/medium
+_OVERCLAIM_PHRASES = [
+    ("you are scaling aggressively", "public signals suggest rapid hiring"),
+    ("you are aggressively hiring", "it appears you are expanding the team"),
+    ("your team is growing fast", "based on public job postings, your team appears to be growing"),
+    ("you have a dedicated AI team", "public signals suggest AI investment"),
+    ("you recently raised", "according to public records, you raised"),
+    ("your engineers tripled", "open roles appear to have increased significantly"),
+    ("you are building", "it appears you are building"),
+]
+
+
+def _confidence_score(signal_brief: dict) -> float:
+    """Compute a 0–1 numeric confidence from the brief's qualitative fields."""
+    ai_conf = signal_brief.get("ai_maturity_conf", "low")
+    seg_conf = signal_brief.get("segment_confidence", "low")
+    send_generic = signal_brief.get("send_generic_email", False)
+
+    conf_map = {"high": 1.0, "medium": 0.55, "low": 0.2}
+    ai_score = conf_map.get(ai_conf, 0.2)
+    seg_score = conf_map.get(seg_conf, 0.2)
+
+    if send_generic:
+        return 0.15
+
+    # Evidence count boosts confidence
+    evidence = signal_brief.get("ai_evidence", [])
+    evidence_boost = min(len(evidence) * 0.05, 0.2)
+
+    return min((ai_score + seg_score) / 2 + evidence_boost, 1.0)
+
+
+def _apply_confidence_phrasing(body: str, confidence: float) -> str:
+    """
+    Post-generation guard: replace over-claiming phrases when confidence
+    is below threshold. This is the core Act IV mechanism.
+
+    High confidence (>= 0.7): keep original assertive language
+    Medium confidence (0.4–0.69): soften claims to hedged language
+    Low confidence (< 0.4): replace assertions with questions/exploration
+    """
+    if confidence >= _CONFIDENCE_THRESHOLDS["high"]:
+        return body  # high confidence: assertive language is appropriate
+
+    result = body
+    for assertive, hedged in _OVERCLAIM_PHRASES:
+        if assertive.lower() in result.lower():
+            # Case-insensitive replace
+            import re
+            result = re.sub(re.escape(assertive), hedged, result, flags=re.IGNORECASE)
+
+    if confidence < _CONFIDENCE_THRESHOLDS["medium"]:
+        # Very low confidence: prepend a disclaimer phrase to the first sentence
+        if not any(p in result.lower() for p in ["it appears", "based on public", "public signals"]):
+            result = "Based on public signals — " + result[0].lower() + result[1:]
+
+    return result
+
 
 # ─────────────────────────────────────────────────────────
 # PART 1 — Write the email using AI
@@ -58,6 +125,9 @@ def write_email(signal_brief: dict) -> dict:
     pitch      = signal_brief.get("pitch_angle", "exploratory_discovery")
     send_generic = signal_brief.get("send_generic_email", False)
     booking_url  = os.getenv("CALCOM_BOOKING_URL", "https://cal.com/tenacious/discovery-call")
+
+    # Act IV mechanism: compute numeric confidence before writing
+    confidence = _confidence_score(signal_brief)
 
     # Build the writing instructions based on segment and confidence
     segment_instructions = {
@@ -165,16 +235,21 @@ Do NOT add any other labels or formatting."""
         subject = f"Engineering capacity for {company}"
         body    = content
 
+    # Act IV mechanism: post-generation confidence phrasing guard
+    body = _apply_confidence_phrasing(body, confidence)
+
     # Calculate cost
     tokens_in  = response.usage.prompt_tokens
     tokens_out = response.usage.completion_tokens
     cost_usd   = (tokens_in * 0.00000014) + (tokens_out * 0.00000028)
 
     return {
-        "subject":    subject,
-        "body":       body,
-        "cost_usd":   round(cost_usd, 7),
-        "latency_ms": latency_ms,
+        "subject":          subject,
+        "body":             body,
+        "cost_usd":         round(cost_usd, 7),
+        "latency_ms":       latency_ms,
+        "confidence_score": round(confidence, 3),
+        "mechanism":        "signal_confidence_aware_phrasing",
     }
 
 
@@ -200,6 +275,12 @@ def send_email(
         print(f"  SUBJECT: {subject}")
         print(f"  BODY:\n{body}\n")
         return {"id": "mock-email-001", "status": "mock_sent"}
+
+    # Kill switch: route all outbound to staff sink unless PRODUCTION_MODE=true
+    STAFF_SINK = os.getenv("STAFF_SINK_EMAIL", "dev-sink@tenacious.com")
+    if os.getenv("PRODUCTION_MODE", "false").lower() != "true":
+        print(f"  [kill-switch] PRODUCTION_MODE != true — redirecting {to_email} → {STAFF_SINK}")
+        to_email = STAFF_SINK
 
     resp = requests.post(
         "https://api.resend.com/emails",
