@@ -25,7 +25,7 @@ from openai import OpenAI
 load_dotenv()
 
 DATA_DIR       = Path(__file__).parent.parent / "data"
-CRUNCHBASE_CSV = DATA_DIR / "crunchbase_sample.csv"
+CRUNCHBASE_CSV = DATA_DIR / "crunchbase-companies-information.csv"
 OUTPUT_DIR     = Path(__file__).parent.parent / "data"
 
 DEV_MODEL = os.getenv("DEV_MODEL", "deepseek/deepseek-chat")
@@ -46,16 +46,43 @@ def load_crunchbase() -> list[dict]:
     return rows
 
 
+def _row_industry(row: dict) -> str:
+    """Extract flat industry string from either 'industry' or 'industries' (JSON) column."""
+    plain = row.get("industry", "")
+    if plain:
+        return plain.lower()
+    raw = row.get("industries", "")
+    if not raw or raw in ("null", "[]", ""):
+        return ""
+    try:
+        import json as _json
+        items = _json.loads(raw)
+        return " ".join(i.get("value", "") for i in items).lower()
+    except Exception:
+        return raw.lower()
+
+
 def find_sector_peers(company_name: str, industry: str, all_companies: list[dict], max_peers: int = 10) -> list[dict]:
-    """Return up to max_peers companies in the same industry, excluding the prospect."""
+    """
+    Return up to max_peers companies in the same industry, excluding the prospect.
+
+    Selection criteria:
+    - Industry match: any word in the prospect's industry string overlaps with the row's
+      industry/industries column (case-insensitive substring match on comma-split tokens).
+    - Excludes the prospect itself by exact name match (case-insensitive).
+    - Returns the first max_peers matches in Crunchbase CSV row order (not ranked by funding
+      or CB rank). This is a known ordering bias — rows near the top of the CSV are
+      overrepresented. Documented in Known Limitations item #5.
+    - peer_selection_method: "industry_keyword_match_first_n" (recorded in brief output).
+    """
     peers = []
     industry_lower = industry.lower()
     for row in all_companies:
         name = row.get("name", "").strip()
-        row_industry = row.get("industry", "").lower()
+        row_industry = _row_industry(row)
         if name.lower() == company_name.lower():
             continue
-        if industry_lower and industry_lower in row_industry:
+        if industry_lower and any(word in row_industry for word in industry_lower.split(",")):
             peers.append(row)
         if len(peers) >= max_peers:
             break
@@ -74,8 +101,8 @@ def score_ai_maturity_simple(company: dict) -> dict:
     score = 0
     signals = []
 
-    description = (company.get("description") or "").lower()
-    industry = (company.get("industry") or "").lower()
+    description = (company.get("description") or company.get("about") or company.get("full_description") or "").lower()
+    industry = _row_industry(company)
     name = company.get("name", "")
 
     ai_keywords = ["ai", "machine learning", "ml", "artificial intelligence",
@@ -98,9 +125,9 @@ def score_ai_maturity_simple(company: dict) -> dict:
         "score": score,
         "confidence": "medium" if score > 0 else "low",
         "signals": signals,
-        "industry": company.get("industry", ""),
+        "industry": _row_industry(company),
         "funding_usd": funding,
-        "employees": company.get("employee_count", "unknown"),
+        "employees": company.get("num_employees", company.get("employee_count", "unknown")),
     }
 
 
@@ -191,11 +218,27 @@ def generate_competitor_gap_brief(
     all_companies = load_crunchbase()
     peers_raw = find_sector_peers(prospect_name, prospect_industry, all_companies)
 
-    if not peers_raw:
-        print("  [warn] No sector peers found in Crunchbase sample — using fallback")
-        peers_raw = [{"name": f"Peer {i+1}", "description": "AI-focused tech company",
-                      "industry": prospect_industry, "total_funding_usd": "20000000",
-                      "employee_count": "80"} for i in range(3)]
+    # Sparse sector guard — fabricated peers produce misleading gap analysis.
+    # Require at least 3 real peers; fewer means insufficient evidence for claims.
+    MIN_PEERS = 3
+    if len(peers_raw) < MIN_PEERS:
+        print(f"  [warn] Only {len(peers_raw)} sector peers found (need {MIN_PEERS}) — skipping gap analysis")
+        return {
+            "generated_at": datetime.utcnow().isoformat(),
+            "prospect": {"name": prospect_name, "industry": prospect_industry, "ai_maturity_score": prospect_ai_score},
+            "sector_analysis": {"peers_analyzed": len(peers_raw), "insufficient_data": True},
+            "top_quartile_peers": [],
+            "gap_practices": [],
+            "outreach_hook": (
+                "We've been researching your sector and would like to share some benchmarking — "
+                "would a quick conversation be useful?"
+            ),
+            "sparse_sector": True,
+            "sparse_sector_note": (
+                f"Fewer than {MIN_PEERS} comparable companies found in the Crunchbase dataset "
+                f"for industry '{prospect_industry}'. Gap analysis skipped to avoid fabricating claims."
+            ),
+        }
 
     # Score each peer
     scored_peers = [score_ai_maturity_simple(p) for p in peers_raw]
@@ -226,6 +269,7 @@ def generate_competitor_gap_brief(
             "sector_mean_ai_score": round(sector_mean, 2),
             "prospect_percentile": round(percentile, 2),
             "prospect_vs_top_quartile": prospect_ai_score - (top_quartile[0]["score"] if top_quartile else 0),
+            "peer_selection_method": "industry_keyword_match_first_n",
         },
         "top_quartile_peers": top_quartile,
         "gap_practices": gap_practices,

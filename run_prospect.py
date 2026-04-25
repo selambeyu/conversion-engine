@@ -150,21 +150,64 @@ def run_end_to_end(
     print(f"  Trace ID:    {outreach.get('trace_id')}")
     print(f"  Booking:     {booking}")
     print()
-    print("  Take these screenshots for Wednesday PDF:")
-    print("  [ ] HubSpot contact — all custom fields filled")
-    print("  [ ] Resend dashboard — email delivered")
-    print("  [ ] Langfuse — trace visible")
     print("=" * 55)
 
     return record
 
 
 if __name__ == "__main__":
+    import argparse
+    from run_batch import load_and_score_companies
+
     download_data_files()
 
+    parser = argparse.ArgumentParser(description="Run pipeline for one auto-selected prospect from Crunchbase")
+    parser.add_argument("--segment",   default="", help="ICP segment filter")
+    parser.add_argument("--min-score", type=int, default=1, help="Min AI maturity score (default 1)")
+    parser.add_argument("--company",   default="", help="Force a specific company name from the CSV")
+    args = parser.parse_args()
+
+    if args.company:
+        # Forced company — look it up directly
+        candidates = load_and_score_companies(limit=100)
+        match = next((c for c in candidates if c["company_name"].lower() == args.company.lower()), None)
+        if not match:
+            print(f"[error] '{args.company}' not found in Crunchbase CSV ICP matches.")
+            sys.exit(1)
+        candidates = [match]
+    else:
+        # Auto-select the highest-scoring ICP match
+        candidates = load_and_score_companies(
+            segment_filter=args.segment,
+            min_ai_score=args.min_score,
+            limit=1,
+        )
+
+    if not candidates:
+        print("[error] No ICP matches found. Try lowering --min-score.")
+        sys.exit(1)
+
+    best = candidates[0]
+    company_name   = best["company_name"]
+    contact_email  = best["contact_email"]
+
+    # Use contact email from Crunchbase; fall back to a dev sink if redacted
+    if not contact_email or "█" in contact_email:
+        print(f"[warn] No usable contact email for {company_name} — using dev sink")
+        contact_email = os.getenv("STAFF_SINK_EMAIL", "dev-sink@tenacious.com")
+
+    prospect_name = f"Team at {company_name}"
+
+    print(f"\nAuto-selected prospect from Crunchbase:")
+    print(f"  Company : {company_name}")
+    print(f"  Segment : {best['segment']}")
+    print(f"  AI Score: {best['ai_score']}/3")
+    print(f"  Industry: {best['industry']}")
+    print(f"  Email   : {contact_email}\n")
+
     run_end_to_end(
-        company_name   = "Acme AI",
-        prospect_name  = "Alex Chen",
-        prospect_email = "melkambeyu@gmail.com",
-        open_roles     = 8,
+        company_name   = company_name,
+        prospect_name  = prospect_name,
+        prospect_email = contact_email,
+        open_roles     = 0,
     )

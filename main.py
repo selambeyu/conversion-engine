@@ -14,6 +14,7 @@ import json
 import hmac
 import hashlib
 import logging
+import os
 from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -24,6 +25,13 @@ from agent.hubspot_handler import (
     log_email_activity,
     find_contact_by_email,
     mark_meeting_booked,
+)
+from agent.channel_policy import (
+    decide_next_action,
+    classify_inbound_event,
+    ProspectState,
+    Action,
+    Channel,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -269,7 +277,7 @@ async def receive_email_reply(request: Request):
         "message_id": message_id,
     })
 
-    # Mark as warm lead for SMS escalation — cross-link email so SMS webhook can resolve HubSpot ID
+    # Mark as warm lead — cross-link email so SMS webhook can resolve HubSpot ID
     mark_warm_lead(sender_email, email=sender_email)
 
     # Log to HubSpot if we have a contact
@@ -282,9 +290,34 @@ async def receive_email_reply(request: Request):
             body=text_body[:2000],
             direction="inbound",
         )
-        update_status(hubspot_id, "replied")
 
-    return {"status": "received", "from": sender_email}
+    # ── Channel policy decision ──────────────────────────────────────────
+    prospect_ctx = {
+        "email":       sender_email,
+        "phone":       thread.get("phone", ""),
+        "booking_url": thread.get("booking_url",
+                       os.getenv("CALCOM_BOOKING_URL", "https://cal.com/tenacious/discovery-call")),
+        "hubspot_id":  hubspot_id,
+    }
+    decision = decide_next_action(
+        current_state=ProspectState.EMAIL_SENT,
+        prospect=prospect_ctx,
+        event=classify_inbound_event(text_body, source="email"),
+        reply_text=text_body,
+    )
+    log.info(f"Channel decision | action={decision.action} channel={decision.channel} reason={decision.reason}")
+
+    if hubspot_id:
+        update_status(hubspot_id, decision.new_state.value)
+
+    if decision.action == Action.ROUTE_TO_HUMAN:
+        log.warning(f"Human handoff required | {sender_email} | {decision.reason}")
+
+    return {
+        "status":   "received",
+        "from":     sender_email,
+        "decision": {"action": decision.action, "channel": decision.channel, "new_state": decision.new_state},
+    }
 
 
 # ─────────────────────────────────────────────────────────
@@ -382,7 +415,7 @@ async def receive_calcom_booking(request: Request):
 
     log.info(f"Booking confirmed | prospect={prospect_email} | start={start_time}")
 
-    # Sync to HubSpot
+    # Sync to HubSpot + channel policy
     if prospect_email:
         hubspot_id = _lookup_hubspot_id(prospect_email)
         if hubspot_id:
@@ -391,7 +424,14 @@ async def receive_calcom_booking(request: Request):
                 booking_url=booking_url or meeting_url,
                 booked_at=start_time,
             )
-            log.info(f"HubSpot updated | contact={hubspot_id} | meeting_booked=true")
+            # Channel policy: booking confirmed → human handoff
+            decision = decide_next_action(
+                current_state=ProspectState.BOOKED,
+                prospect={"email": prospect_email, "phone": "", "hubspot_id": hubspot_id},
+                event="booking_confirmed",
+            )
+            update_status(hubspot_id, decision.new_state.value)
+            log.info(f"HubSpot updated | contact={hubspot_id} | meeting_booked=true | next={decision.action}")
         else:
             log.warning(f"No HubSpot contact found for {prospect_email} — booking not synced")
 

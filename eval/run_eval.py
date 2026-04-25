@@ -79,13 +79,19 @@ def load_tau2():
 
 
 def make_config():
-    """Build a TextRunConfig for the pinned dev-tier model."""
+    """Build a TextRunConfig for the pinned dev-tier model.
+    Both agent and user simulator use the same OpenRouter model to avoid
+    requiring a separate OPENAI_API_KEY (tau2 default is gpt-4.1).
+    """
     from tau2.data_model.simulation import TextRunConfig
+    USER_MODEL = os.environ.get("TAU2_USER_MODEL", MODEL)
     return TextRunConfig(
         domain=DOMAIN,
         agent="llm_agent",
         llm_agent=MODEL,
         llm_args_agent={"temperature": TEMPERATURE},
+        llm_user=USER_MODEL,
+        llm_args_user={"temperature": 0.0},
     )
 
 
