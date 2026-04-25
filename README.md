@@ -166,8 +166,9 @@ uv run uvicorn main:app --reload
 ├── run_prospect.py                 # End-to-end prospect runner
 │
 ├── agent/
-│   ├── email_handler.py            # Resend outbound email + AI writing
-│   ├── sms_handler.py              # Africa's Talking SMS (send + normalize)
+│   ├── channel_policy.py           # Centralized channel handoff state machine (email→SMS→voice)
+│   ├── email_handler.py            # Resend outbound email + AI writing + confidence phrasing guard
+│   ├── sms_handler.py              # Africa's Talking SMS (send + normalize + warm-lead gate)
 │   ├── hubspot_handler.py          # HubSpot contact upsert + activity log
 │   ├── hubspot_setup.py            # One-time custom property creation
 │   ├── calendar_handler.py         # Cal.com booking link generator
@@ -211,3 +212,45 @@ uv run uvicorn main:app --reload
 | Resend | $0 | Free tier |
 | Langfuse | $0 | Free tier (50K traces) |
 | **Total** | **≤ $20** | **~$2.99** |
+
+---
+
+## Known Limitations
+
+A successor inheriting this system should be aware of the following before deploying against live Tenacious prospects.
+
+### Signal Enrichment
+
+**1. Job-post velocity is a point estimate, not a 60-day delta.**
+`job_post_scraper.py` returns total listings at scrape time. The challenge spec requires a change metric over a 60-day window (i.e., how many roles were added vs. 60 days ago). To fix: store each scrape result in `logs/job_post_snapshots.jsonl` keyed by `(company, date)` and compute delta against the oldest snapshot within the window.
+
+**2. LinkedIn job scraping is not implemented.**
+The scraper covers Wellfound and BuiltIn only. LinkedIn public job pages are the highest-signal source for most US tech companies. Adding it requires Playwright handling of LinkedIn's public company jobs page (`/jobs` tab, no login). Respect `robots.txt` — LinkedIn disallows most bots; check before adding.
+
+**3. Leadership change detection relies only on the Crunchbase `leadership_hire` field.**
+Press release parsing and external news sources are not implemented. A new CTO who has not been added to Crunchbase yet will be missed. Fix: add a lightweight news search against the company name + "CTO" or "VP Engineering" using a free news API (e.g., NewsAPI free tier).
+
+**4. AI maturity GitHub signal uses HTTP HEAD only — no repo-level analysis.**
+`_check_github_org()` checks for AI keywords in the GitHub org page HTML. It does not enumerate repos or check commit history. A company with a private AI repo or a repo named generically (e.g., `ml-platform`) will score 0 on this signal. This is a known false-negative.
+
+**5. Layoffs name-matching uses substring search.**
+`check_layoffs()` matches `company_name_lower in row["Company"].lower()`. Two companies sharing a name substring (e.g., "TechCorp" and "TechCorp Solutions") will both receive each other's layoff signal. Fix: switch to exact-match or fuzzy match with a similarity threshold ≥ 0.85.
+
+### Channel and Integration
+
+**6. Cal.com booking links do not inject timezone for East Africa prospects.**
+Prospects in UTC+3 (Kenya, Ethiopia) see times in the browser's detected timezone, which is correct for web but ambiguous in SMS links. Add `?timezone=Africa/Nairobi` or `Africa/Addis_Ababa` when prospect `country_code` is `KE` or `ET`.
+
+**7. Multi-turn email reply handling is in-memory only.**
+`email_threads` dict in `main.py` is not persisted. Server restart loses all in-progress conversation state. Fix: persist to Redis or a simple SQLite table keyed by sender email.
+
+**8. SMS warm-lead registry is in-memory only.**
+`_warm_leads` in `sms_handler.py` has the same problem. A restart means the warm-lead guard loses its state and could block legitimate warm-lead SMS. Fix: persist to HubSpot `outreach_status` field or a local SQLite table.
+
+### Evaluation
+
+**9. Act IV mechanism (signal-confidence-aware phrasing) does not improve τ²-Bench score.**
+Delta A = +0.01 (p = 0.87). This is expected: the mechanism targets email grounding quality, which τ²-Bench retail does not measure. The correct evaluation metric is fraction of outbound emails containing over-claiming language before vs. after the guard — tracked via `confidence_score` in `logs/prospect_runs.jsonl`. See `method.md` for full explanation.
+
+**10. Kill switch is not wired as a hard environment variable gate.**
+The challenge spec requires `PRODUCTION_MODE=false` to route all outbound to a staff sink. Currently this is documented but not enforced in code. Before live deployment, add: `if not os.getenv("PRODUCTION_MODE") == "true": recipient = STAFF_SINK_EMAIL` in `email_handler.py` and `sms_handler.py`.

@@ -1,0 +1,105 @@
+{
+  "generated_at": "2026-04-25T00:00:00Z",
+  "claims": {
+    "tau2_pass_at_1_baseline": {
+      "value": "72.67%",
+      "ci_95": "[65.04%, 79.17%]",
+      "source_file": "eval/score_log.json",
+      "source_field": "pass_at_1",
+      "sample_trace_id": "9f1bceea-557f-4086-b5f0-ddebed571544"
+    },
+    "tau2_published_reference": {
+      "value": "~42%",
+      "source": "tau2-bench leaderboard Feb 2026",
+      "url": "github.com/sierra-research/tau2-bench"
+    },
+    "tau2_cost_per_task": {
+      "value": "/bin/zsh.0199",
+      "source_file": "eval/score_log.json",
+      "source_field": "avg_agent_cost"
+    },
+    "tau2_total_cost_dev_tier": {
+      "value": ".985",
+      "calculation": "150 runs x /bin/zsh.0199",
+      "source_file": "eval/score_log.json"
+    },
+    "tau2_p50_latency": {
+      "value": "105.95s",
+      "source_file": "eval/score_log.json",
+      "source_field": "p50_latency_seconds"
+    },
+    "tau2_p95_latency": {
+      "value": "551.65s",
+      "source_file": "eval/score_log.json",
+      "source_field": "p95_latency_seconds"
+    },
+    "cost_per_qualified_lead": {
+      "value": "~/bin/zsh.042",
+      "calculation": "enrichment (/bin/zsh.002 Crunchbase+layoffs CSV lookup) + LLM email write (/bin/zsh.020 avg) + API overhead (/bin/zsh.001 Resend+HubSpot) + Langfuse (/bin/zsh.000)",
+      "source_file": "logs/prospect_runs.jsonl",
+      "sample_run_trace_id": "c138449f534747a790fdc2654ad16c78"
+    },
+    "speed_to_lead": {
+      "value": "8-15 seconds per prospect",
+      "vs_manual": "42 minutes median (Tenacious executive interview)",
+      "source_file": "logs/prospect_runs.jsonl"
+    },
+    "stalled_thread_rate_manual": {
+      "value": "30-40%",
+      "source": "Tenacious CFO estimate, challenge document page 3"
+    },
+    "reply_rate_baseline_b2b": {
+      "value": "1-3%",
+      "source": "LeadIQ 2026 / Apollo benchmarks, challenge document"
+    },
+    "reply_rate_signal_grounded": {
+      "value": "7-12%",
+      "source": "Clay, Smartlead case studies, challenge document"
+    },
+    "acv_talent_outsourcing": {
+      "value": "K-K",
+      "source": "Tenacious internal, challenge document Table 2"
+    },
+    "acv_project_consulting": {
+      "value": "K-K",
+      "source": "Tenacious internal, challenge document Table 2"
+    },
+    "discovery_to_proposal_conversion": {
+      "value": "35-50%",
+      "source": "Tenacious internal, last 4 quarters, challenge document"
+    },
+    "proposal_to_close_conversion": {
+      "value": "25-40%",
+      "source": "Tenacious internal, last 4 quarters, challenge document"
+    },
+    "held_out_baseline_pass_at_1": {
+      "value": "72.00%",
+      "ci_95": "[63.2%, 80.8%]",
+      "source_file": "eval/ablation_results.json",
+      "source_field": "held_out_baseline.pass_at_1"
+    },
+    "method_pass_at_1": {
+      "value": "73.00%",
+      "ci_95": "[64.3%, 81.7%]",
+      "source_file": "eval/ablation_results.json",
+      "source_field": "your_method.pass_at_1"
+    },
+    "delta_a": {
+      "value": "+0.01 (not significant, p=0.87)",
+      "honest_explanation": "Mechanism targets email grounding quality not tau2-bench task completion. See method.md.",
+      "source_file": "eval/ablation_results.json",
+      "source_field": "delta_a"
+    },
+    "annualized_impact_one_segment": {
+      "value": ".1M-.3M",
+      "calculation": "60 emails/week x 52 weeks = 3,120 outbound x 7% reply rate x 42% discovery conversion x 32% close x K ACV midpoint",
+      "source": "Tenacious internal rates (challenge doc) + LeadIQ/Clay benchmarks"
+    },
+    "pilot_recommendation": {
+      "segment": "recently_funded_startup",
+      "lead_volume": "100 prospects over 30 days",
+      "weekly_budget": " (LLM + API)",
+      "success_criterion": "At least 2 qualified discovery calls booked in 30 days"
+    }
+  }
+}
